@@ -38,5 +38,3 @@ case object Arn extends Parser[Try[Arn]]{
     }
 
 }
-
-given arnParser: Parser[Try[Arn]] = Arn

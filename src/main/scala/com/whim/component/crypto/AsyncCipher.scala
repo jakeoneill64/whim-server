@@ -5,9 +5,9 @@ import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.kms.KmsAsyncClient
 import software.amazon.awssdk.services.kms.model.{DecryptRequest, EncryptRequest}
 import com.typesafe.config.{Config, ConfigFactory}
-import com.whim.component.config.{CryptoConfiguration, given}
+import com.whim.component.Parser
+import com.whim.component.config.given
 import software.amazon.awssdk.core.SdkBytes
-import software.amazon.awssdk.services.kms.endpoints.internal.Arn
 
 import scala.compat.java8.FutureConverters.toScala
 import scala.annotation.tailrec
@@ -21,8 +21,7 @@ import java.security.SecureRandom
 import javax.crypto.{Cipher, KeyGenerator, SecretKey}
 import javax.crypto.spec.{IvParameterSpec, SecretKeySpec}
 import scala.language.postfixOps
-import com.whim.component.Parser
-import com.whim.component.aws.given
+import com.whim.component.aws.Arn
 
 
 trait AsyncCipher{
@@ -32,16 +31,35 @@ trait AsyncCipher{
 
 object AwsKmsCipher extends AsyncCipher {
 
-  private lazy val kmsClient = KmsAsyncClient.builder().region(Region.of("")).build()
+  private lazy val arnParser: Parser[Try[Arn]] = Arn
+  private lazy val
+    CryptoConfiguration(
+      kekArn,
+      kekAlgorithm,
+      dataEncryptionAlgorithm,
+      dataEncryptionCipherMode,
+      dekSize
+    ) = CryptoConfiguration()
+  private lazy val kmsClient = KmsAsyncClient
+                                    .builder()
+                                    .region(
+                                      Region.of(
+                                        arnParser
+                                          .parse(kekArn)
+                                          .map(_ region)
+                                          .get // Bubble her. We can't recover from a malformed ARN here.
+                                      )
+                                    )
+                                    .build()
 
   override def decrypt(data: Array[Byte]): Future[Array[Byte]] =
     toScala(
       kmsClient.decrypt(
         DecryptRequest
           .builder
-          .keyId(summon[CryptoConfiguration].kekArn)
+          .keyId(kekArn)
           .ciphertextBlob(SdkBytes.fromByteArray(data))
-          .encryptionAlgorithm(summon[CryptoConfiguration].kekAlgorithm)
+          .encryptionAlgorithm(kekAlgorithm)
           .build
     )).map {
         _.plaintext().asByteArray()
@@ -53,9 +71,9 @@ object AwsKmsCipher extends AsyncCipher {
       kmsClient.encrypt(
         EncryptRequest
           .builder
-          .keyId(summon[CryptoConfiguration].kekArn)
+          .keyId(kekArn)
           .plaintext(SdkBytes.fromByteArray(data))
-          .encryptionAlgorithm(summon[CryptoConfiguration].kekAlgorithm)
+          .encryptionAlgorithm(kekAlgorithm)
           .build
 
     )).map {
@@ -64,24 +82,34 @@ object AwsKmsCipher extends AsyncCipher {
 
 }
 
+val KekCipher: AsyncCipher = AwsKmsCipher
 object DekCipher extends AsyncCipher{
+
+  private lazy val
+  CryptoConfiguration(
+    kekArn,
+    kekAlgorithm,
+    dataEncryptionAlgorithm,
+    dataEncryptionCipherMode,
+    dekSize
+  ) = CryptoConfiguration()
 
   override def encrypt(data: Array[Byte]): Future[Array[Byte]] =
 
       Future {
-        val keyGenerator = KeyGenerator getInstance summon[CryptoConfiguration].dataEncryptionAlgorithm
-        keyGenerator init summon[CryptoConfiguration].dekSize
+        val keyGenerator = KeyGenerator getInstance dataEncryptionAlgorithm
+        keyGenerator init dekSize
         val dek: SecretKey = keyGenerator.generateKey()
-        (dek, summon[AsyncCipher].encrypt(dek.getEncoded))
+        (dek, KekCipher.encrypt(dek.getEncoded))
       }
       .flatMap {
-        case (dek, encryptedDekFuture) => encryptedDekFuture.map{
+        case (dek, encryptedDekFuture) => encryptedDekFuture.map {
           (dek, _)
         }
       }.map {
           case (dek, encryptedDek) =>
             val cipher = Cipher getInstance (
-              s"${summon[CryptoConfiguration].dataEncryptionAlgorithm}/${summon[CryptoConfiguration].dataEncryptionCipherMode}/PKCS5Padding"
+              s"$dataEncryptionAlgorithm/$dataEncryptionCipherMode/PKCS5Padding"
               )
             val iv: Array[Byte] = new Array(cipher.getBlockSize)
             new SecureRandom() nextBytes iv
@@ -116,13 +144,13 @@ object DekCipher extends AsyncCipher{
         case (encryptedDekSize, dek) =>
 
           val cipher = Cipher getInstance
-            s"${summon[CryptoConfiguration].dataEncryptionAlgorithm}/${summon[CryptoConfiguration].dataEncryptionCipherMode}/PKCS5Padding"
+            s"$dataEncryptionAlgorithm/$dataEncryptionCipherMode/PKCS5Padding"
           val iv = data.slice(Integer.BYTES + encryptedDekSize, Integer.BYTES + encryptedDekSize + cipher.getBlockSize)
           val cipherText = data drop Integer.BYTES + encryptedDekSize + cipher.getBlockSize
 
           cipher.init(
             Cipher.DECRYPT_MODE,
-            new SecretKeySpec(dek, summon[CryptoConfiguration].dataEncryptionAlgorithm),
+            new SecretKeySpec(dek, dataEncryptionAlgorithm),
             new IvParameterSpec(iv)
           )
           cipher doFinal cipherText
