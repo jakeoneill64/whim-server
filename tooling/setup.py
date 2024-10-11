@@ -8,9 +8,10 @@ from Crypto.Random import get_random_bytes
 from Crypto.Util.Padding import pad
 import base64
 
-def write_config_secrets(config_secrets):
+def write_config_secrets(config_secrets, **kwargs):
 
-    config = ConfigFactory.parse_file(f'{os.environ["WHIM_HOME"]}/config/application.conf')
+    config_file = kwargs.get('config_file', f'{os.environ["WHIM_HOME"]}/src/main/resources/application.conf')
+    config = ConfigFactory.parse_file(config_file)
     kms_key_arn = config['crypto.kms.kek-arn']
     kms_encryption_algorithm = config['crypto.kms.encryption-algorithm']
     dek_size = config['crypto']['dek-size']
@@ -20,7 +21,7 @@ def write_config_secrets(config_secrets):
     kms_client = boto3.client('kms')
     encrypted_dek = kms_client.encrypt(
         KeyId=kms_key_arn,
-        Plaintext=get_random_bytes(dek_size // 8),
+        Plaintext=dek,
         EncryptionAlgorithm=kms_encryption_algorithm
     )['CiphertextBlob']
 
@@ -32,10 +33,10 @@ def write_config_secrets(config_secrets):
         key = config
         for component in key_components[:-1]:
             key = key[component]
-        key[key_components[-1]] = base64.b64encode(encrypted_dek + iv + ciphertext).decode('utf-8')
+        key[key_components[-1]] = base64.b64encode(len(encrypted_dek).to_bytes(4) + encrypted_dek + iv + ciphertext).decode('utf-8')
 
-    with open(f'{os.environ["WHIM_HOME"]}/config/application.conf', 'w') as config_file:
-        config_file.write(HOCONConverter.convert(config, "hocon"))
+    with open(config_file, 'w') as opened_config_file:
+        opened_config_file.write(HOCONConverter.convert(config, "hocon"))
 
 
 if __name__ == '__main__':
@@ -62,8 +63,19 @@ Available Commands:
 """
         )
 
+    config_file = None
+
+    if '--config-file' in argument_string or '-c' in argument_string:
+        config_file_pattern = r"((--config-file)|(-c))=(.*?\.conf)"
+        match = re.match(config_file_pattern, argument_string)
+        _, _, _, config_file = match.groups()
+
+
     if 'secret' in argument_string:
         secret_pattern = r"secret\s+([\w\-\.]+)=(.+?)(?:\s|$)"
         matches = re.findall(secret_pattern, argument_string)
-        write_config_secrets([match for match in matches])
+        kwargs = {}
+        if config_file is not None:
+            kwargs['config_file'] = config_file
+        write_config_secrets([match for match in matches], config_file=config_file)
         
