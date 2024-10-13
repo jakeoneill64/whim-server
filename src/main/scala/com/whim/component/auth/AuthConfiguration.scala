@@ -8,7 +8,8 @@ import java.nio.charset.StandardCharsets
 import scala.concurrent.Future
 
 case class GoogleAuthConfig(clientId: String, clientSecret: String)
-case class AuthConfiguration(googleConfig: GoogleAuthConfig)
+case class FacebookAuthConfig(clientId: String, clientSecret: String)
+case class AuthConfiguration(googleConfig: GoogleAuthConfig, facebookConfig: FacebookAuthConfig)
 
 case object AuthConfiguration{
 
@@ -17,13 +18,26 @@ case object AuthConfiguration{
 
   def apply(): Future[AuthConfiguration] =
 
-    dekCipher.decrypt(config.getString("auth.google.client-secret").getBytes(StandardCharsets.UTF_8)).map{
-
-      clientSecret => AuthConfiguration(
-            GoogleAuthConfig(
-              config.getString("auth.google.client-id"),
-              String(clientSecret, StandardCharsets.UTF_8)
-            )
+    dekCipher.decrypt(config.getString("auth.google.client-secret").getBytes(StandardCharsets.UTF_8)).map {
+      googleClientSecret =>
+        (
+          googleClientSecret,
+          dekCipher.decrypt(config.getString("auth.facebook.client-secret").getBytes(StandardCharsets.UTF_8))
+        )
+    }.flatMap {
+      case (googleClientSecret, facebookClientSecretFuture) => facebookClientSecretFuture.map {
+        (googleClientSecret, _)
+      }
+    }.map {
+      case (googleClientSecret, facebookClientSecret) => AuthConfiguration(
+        GoogleAuthConfig(
+          config.getString("auth.google.client-id"),
+          String(googleClientSecret, StandardCharsets.UTF_8)
+        ),
+        FacebookAuthConfig(
+          config.getString("auth.facebook.client-id"),
+          String(facebookClientSecret, StandardCharsets.UTF_8)
+        )
       )
     }
 

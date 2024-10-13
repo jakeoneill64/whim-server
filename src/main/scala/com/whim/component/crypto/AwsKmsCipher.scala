@@ -1,8 +1,8 @@
 package com.whim.component.crypto
 
-import com.whim.component.Parser
 import com.whim.component.config.given
 import com.whim.component.crypto.{AsyncCipher, CryptoConfiguration}
+import com.whim.generic.Parser
 import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.kms.KmsAsyncClient
